@@ -3,8 +3,6 @@
 > **Objectif :** comprendre comment Kubernetes organise un cluster et comment une API Spring Boot fictive y est exécutée.
 >
 > **Exemple fil rouge :** `api-commandes`, une API qui expose des opérations simples de consultation et de création de commandes.
->
-> **Important :** tous les noms, domaines, images et paramètres de ce guide sont fictifs. Aucun nom provenant d'une application réelle n'est utilisé.
 
 ## Sommaire
 

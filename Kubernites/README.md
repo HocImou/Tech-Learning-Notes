@@ -1,6 +1,6 @@
 # Parcours Kubernetes — API Spring Boot fictive
 
-Ce dossier rassemble les notions étudiées avec une application fil rouge fictive nommée `api-commandes`. Aucun nom d'application réelle n'est utilisé.
+Ce dossier rassemble les notions étudiées avec une application fil rouge fictive nommée `api-commandes`.
 
 ## Documents
 
