@@ -1,0 +1,1812 @@
+# JPA et Hibernate avec Spring Boot : guide pratique et bonnes pratiques
+
+## Sommaire
+
+1. [Introduction à JPA et Hibernate](#1-introduction-à-jpa-et-hibernate)
+2. [Architecture et fonctionnement général](#2-architecture-et-fonctionnement-général)
+3. [Mapping entre Java et SQL](#3-mapping-entre-java-et-sql)
+4. [Les annotations JPA essentielles](#4-les-annotations-jpa-essentielles)
+5. [Le cycle de vie d'une entité](#5-le-cycle-de-vie-dune-entité)
+6. [Le contexte de persistance et le Dirty Checking](#6-le-contexte-de-persistance-et-le-dirty-checking)
+7. [Spring Data JPA et Repository](#7-spring-data-jpa-et-repository)
+8. [La gestion des transactions](#8-la-gestion-des-transactions)
+9. [Les relations entre entités](#9-les-relations-entre-entités)
+10. [Optimisation des performances](#10-optimisation-des-performances)
+11. [Sécurité et intégrité des données](#11-sécurité-et-intégrité-des-données)
+12. [Gestion des schémas avec Flyway](#12-gestion-des-schémas-avec-flyway)
+13. [Organisation et architecture du code](#13-organisation-et-architecture-du-code)
+14. [Tests JPA et Hibernate](#14-tests-jpa-et-hibernate)
+15. [Configuration recommandée pour Spring Boot](#15-configuration-recommandée-pour-spring-boot)
+16. [Checklist des bonnes pratiques](#16-checklist-des-bonnes-pratiques)
+
+---
+
+# 1. Introduction à JPA et Hibernate
+
+Lorsqu'une application Spring Boot utilise une base de données relationnelle, nous devons gérer la correspondance entre :
+
+- Les objets Java manipulés dans l'application.
+- Les tables, colonnes et relations présentes dans la base de données.
+
+Deux technologies interviennent fréquemment : JPA et Hibernate.
+
+## 1.1 Qu'est-ce que JPA ?
+
+JPA (Jakarta Persistence API) est une spécification Java qui définit un ensemble de règles et d'interfaces permettant de gérer la persistance des objets Java dans une base de données relationnelle.
+
+JPA définit notamment :
+
+- Les annotations de mapping.
+- Le fonctionnement des entités.
+- Le cycle de vie des objets persistants.
+- Les transactions de persistance.
+- Les requêtes JPQL.
+- Les interfaces comme `EntityManager`.
+
+JPA ne constitue pas une implémentation en elle-même.
+
+## 1.2 Qu'est-ce que Hibernate ?
+
+Hibernate est une implémentation de la spécification JPA.
+
+Il fournit concrètement les mécanismes permettant de :
+
+- Générer les requêtes SQL.
+- Exécuter les opérations CRUD.
+- Gérer le contexte de persistance.
+- Détecter les modifications des entités.
+- Gérer les relations entre objets.
+- Optimiser les interactions avec la base de données.
+- Gérer le cache de premier niveau.
+
+## 1.3 Quelle est la relation entre Spring Data JPA, JPA et Hibernate ?
+
+Ces trois technologies ont des responsabilités différentes.
+
+| Technologie | Responsabilité |
+|---|---|
+| JPA | Définit les contrats et les règles de persistance |
+| Hibernate | Implémente JPA et assure la persistance réelle |
+| Spring Data JPA | Simplifie l'accès aux données et la création des repositories |
+| Spring Boot | Facilite la configuration et l'intégration de ces composants |
+
+Dans une application Spring Boot classique :
+
+```text
+Controller
+    |
+    v
+Service
+    |
+    v
+Spring Data JPA
+    |
+    v
+EntityManager (JPA)
+    |
+    v
+Hibernate
+    |
+    v
+JDBC
+    |
+    v
+PostgreSQL
+```
+
+**À retenir :** Spring Data JPA ne remplace pas Hibernate. Il s'appuie sur JPA, généralement implémenté par Hibernate dans une application Spring Boot.
+
+---
+
+# 2. Architecture et fonctionnement général
+
+Une organisation classique sépare les responsabilités de l'application.
+
+```text
+src/main/java/fr/example/application
+│
+├── controller/
+│   └── TaskController.java
+│
+├── service/
+│   └── TaskService.java
+│
+├── repository/
+│   └── TaskRepository.java
+│
+├── domain/
+│   └── entity/
+│       └── Task.java
+│
+├── dto/
+│   ├── request/
+│   └── response/
+│
+└── exception/
+```
+
+Les responsabilités sont les suivantes :
+
+| Couche | Responsabilité |
+|---|---|
+| Controller | Gérer les requêtes HTTP |
+| Service | Porter les règles métier et orchestrer les opérations |
+| Repository | Accéder aux données |
+| Entity | Représenter les données persistées |
+| DTO | Définir les données échangées avec l'extérieur |
+| Exception | Centraliser les erreurs métier et techniques |
+
+## 2.1 Exemple de flux de création
+
+Lorsqu'un utilisateur demande la création d'une tâche :
+
+1. Le Controller reçoit la requête HTTP.
+2. Le Controller transmet les données au Service.
+3. Le Service construit une entité.
+4. Le Repository demande à JPA de la rendre persistante.
+5. Hibernate génère la requête SQL.
+6. PostgreSQL enregistre les données.
+7. La réponse est retournée au client.
+
+Le Controller ne doit pas accéder directement à Hibernate ou manipuler les requêtes SQL.
+
+---
+
+# 3. Mapping entre Java et SQL
+
+Le mapping consiste à associer les propriétés d'une classe Java aux colonnes d'une table SQL.
+
+Prenons une table `tasks` :
+
+```sql
+CREATE TABLE tasks (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    title VARCHAR(150) NOT NULL,
+    description TEXT,
+    completed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL
+);
+```
+
+L'entité Java correspondante :
+
+```java
+@Entity
+@Table(name = "tasks")
+public class Task {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, length = 150)
+    private String title;
+
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
+    @Column(nullable = false)
+    private boolean completed;
+
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt;
+
+    protected Task() {
+    }
+}
+```
+
+## 3.1 Correspondance entre les types Java et SQL
+
+Quelques correspondances courantes :
+
+| Java | SQL PostgreSQL |
+|---|---|
+| `Long` | BIGINT |
+| `Integer` | INTEGER |
+| `String` | VARCHAR |
+| `String` avec TEXT | TEXT |
+| `Boolean` / `boolean` | BOOLEAN |
+| `BigDecimal` | NUMERIC |
+| `LocalDate` | DATE |
+| `LocalDateTime` | TIMESTAMP |
+| `Instant` | TIMESTAMP WITH TIME ZONE |
+| `UUID` | UUID |
+| `byte[]` | BYTEA |
+
+Attention : le mapping précis dépend du type SQL, du dialecte Hibernate et de la version utilisée.
+
+### LocalDate, LocalDateTime et Instant
+
+Il est important de ne pas confondre ces types.
+
+**LocalDate**
+
+Représente une date sans heure.
+
+```java
+private LocalDate birthDate;
+```
+
+Exemple : `2026-11-11`.
+
+**LocalDateTime**
+
+Représente une date et une heure sans information de fuseau horaire.
+
+```java
+private LocalDateTime createdAt;
+```
+
+Exemple : `2026-11-11T14:30:00`.
+
+**Instant**
+
+Représente un instant précis sur la ligne du temps, généralement stocké et manipulé en UTC.
+
+```java
+private Instant createdAt;
+```
+
+Pour les événements techniques, les dates de création et les horodatages distribués, `Instant` est souvent un meilleur choix que `LocalDateTime`.
+
+Pour les rendez-vous ou les événements associés à un fuseau horaire, il faut également prendre en compte le fuseau horaire métier.
+
+**Bonne pratique :** choisir le type Java en fonction de la sémantique réelle de la donnée, et non uniquement du type SQL disponible.
+
+---
+
+# 4. Les annotations JPA essentielles
+
+Les annotations permettent de décrire comment les objets Java doivent être persistés.
+
+Elles appartiennent principalement au package :
+
+```java
+import jakarta.persistence.*;
+```
+
+Avec Spring Boot 3 et 4, nous utilisons les packages `jakarta.persistence`, et non les anciens packages `javax.persistence`.
+
+## 4.1 Annotations liées aux entités
+
+### @Entity
+
+Indique qu'une classe représente une entité JPA.
+
+```java
+@Entity
+public class Task {
+}
+```
+
+Une entité est suivie par le contexte de persistance lorsqu'elle est gérée par JPA.
+
+### @Table
+
+Permet de préciser le nom de la table.
+
+```java
+@Entity
+@Table(name = "tasks")
+public class Task {
+}
+```
+
+Il est préférable de préciser explicitement le nom lorsque nous souhaitons maîtriser le mapping.
+
+L'annotation permet également de déclarer des contraintes et index :
+
+```java
+@Entity
+@Table(
+    name = "tasks",
+    indexes = {
+        @Index(
+            name = "idx_tasks_completed",
+            columnList = "completed"
+        )
+    }
+)
+public class Task {
+}
+```
+
+Attention : un index doit être justifié par les requêtes réellement exécutées. Ajouter trop d'index peut ralentir les écritures.
+
+### @Id
+
+Définit la clé primaire.
+
+```java
+@Id
+private Long id;
+```
+
+### @GeneratedValue
+
+Définit la stratégie de génération de l'identifiant.
+
+```java
+@Id
+@GeneratedValue(strategy = GenerationType.IDENTITY)
+private Long id;
+```
+
+Les principales stratégies :
+
+| Stratégie | Fonctionnement |
+|---|---|
+| IDENTITY | L'identifiant est généré par la base |
+| SEQUENCE | Utilise une séquence SQL |
+| TABLE | Utilise une table pour gérer les identifiants |
+| AUTO | Laisse le fournisseur JPA choisir |
+
+Avec PostgreSQL, `IDENTITY` et `SEQUENCE` sont couramment utilisées.
+
+`SEQUENCE` peut notamment être intéressante pour les insertions en batch, car Hibernate peut réserver des identifiants avant l'insertion.
+
+### @Column
+
+Permet de configurer une colonne.
+
+```java
+@Column(
+    name = "title",
+    nullable = false,
+    length = 150,
+    unique = false
+)
+private String title;
+```
+
+Attributs courants :
+
+| Attribut | Rôle |
+|---|---|
+| name | Nom de la colonne |
+| nullable | Indique si la colonne accepte NULL |
+| length | Longueur pour les colonnes de type chaîne |
+| unique | Définit une contrainte d'unicité |
+| precision | Précision numérique |
+| scale | Nombre de décimales |
+| updatable | Autorise ou non la mise à jour par JPA |
+| insertable | Autorise ou non l'insertion par JPA |
+| columnDefinition | Spécifie une définition SQL particulière |
+
+Attention : `nullable = false` décrit le mapping et peut influencer la génération du schéma. Avec Flyway et `ddl-auto: validate`, la véritable contrainte doit également exister dans la migration SQL.
+
+### @Transient
+
+Permet d'exclure un attribut du mapping JPA.
+
+```java
+@Transient
+private String temporaryValue;
+```
+
+Cette propriété existe dans l'objet Java, mais ne correspond à aucune colonne persistée.
+
+Ne pas confondre avec le mot-clé Java `transient`, qui concerne la sérialisation Java.
+
+---
+
+## 4.2 Annotations liées aux dates
+
+### @Temporal
+
+Ancienne annotation permettant de préciser le mapping de certains types `java.util.Date` et `java.util.Calendar`.
+
+```java
+@Temporal(TemporalType.DATE)
+private Date birthDate;
+```
+
+Les valeurs possibles :
+
+- DATE
+- TIME
+- TIMESTAMP
+
+**Attention :** ne pas utiliser `@Temporal` avec `LocalDate`, `LocalDateTime` ou `Instant`. Ces types Java modernes sont directement pris en charge par JPA.
+
+### @PrePersist
+
+Exécute une méthode avant la première insertion.
+
+```java
+@PrePersist
+protected void onCreate() {
+    createdAt = LocalDateTime.now();
+}
+```
+
+### @PreUpdate
+
+Exécute une méthode avant une mise à jour.
+
+```java
+@PreUpdate
+protected void onUpdate() {
+    updatedAt = LocalDateTime.now();
+}
+```
+
+### @PostLoad
+
+Exécute une méthode après le chargement d'une entité depuis la base.
+
+Ces annotations font partie des callbacks du cycle de vie JPA.
+
+---
+
+## 4.3 Annotations liées aux relations
+
+Les relations sont détaillées dans la section 9.
+
+| Annotation | Relation |
+|---|---|
+| `@OneToOne` | Un à un |
+| `@OneToMany` | Un à plusieurs |
+| `@ManyToOne` | Plusieurs à un |
+| `@ManyToMany` | Plusieurs à plusieurs |
+| `@JoinColumn` | Colonne de jointure |
+| `@JoinTable` | Table de jointure |
+| `@MapsId` | Partage d'identifiant |
+| `@OrderBy` | Ordonnancement d'une collection |
+
+---
+
+## 4.4 Annotations liées à la concurrence et aux verrous
+
+### @Version
+
+Permet de mettre en place le verrouillage optimiste.
+
+```java
+@Version
+private Long version;
+```
+
+Hibernate utilise cette propriété pour détecter les modifications concurrentes.
+
+Exemple :
+
+- Deux utilisateurs chargent la même tâche.
+- Le premier modifie et enregistre la tâche.
+- Le second tente d'enregistrer une ancienne version.
+- Hibernate détecte le conflit et peut lever une exception de verrouillage optimiste.
+
+Cette approche évite qu'une modification écrase silencieusement celle d'un autre utilisateur.
+
+### @Lock
+
+Annotation Spring Data JPA permettant de définir un verrou sur une requête du Repository.
+
+```java
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+@Query("SELECT t FROM Task t WHERE t.id = :id")
+Optional<Task> findByIdForUpdate(Long id);
+```
+
+Les principaux modes :
+
+- `OPTIMISTIC`
+- `OPTIMISTIC_FORCE_INCREMENT`
+- `PESSIMISTIC_READ`
+- `PESSIMISTIC_WRITE`
+
+Les verrous pessimistes doivent être utilisés avec discernement, car ils peuvent réduire la concurrence et provoquer des blocages.
+
+---
+
+# 5. Le cycle de vie d'une entité
+
+JPA définit plusieurs états pour les entités.
+
+Comprendre ces états est essentiel pour maîtriser Hibernate.
+
+## 5.1 Les quatre états principaux
+
+### Transient (nouvelle entité)
+
+L'objet existe uniquement en mémoire.
+
+```java
+Task task = new Task("Apprendre JPA", "Étudier Hibernate");
+```
+
+Aucune persistance n'est encore associée à cet objet.
+
+### Managed (entité gérée)
+
+L'objet est suivi par le contexte de persistance.
+
+```java
+Task task = entityManager.find(Task.class, 1L);
+```
+
+Hibernate surveille les modifications de cette entité.
+
+### Detached (entité détachée)
+
+L'objet a été géré précédemment, mais n'est plus suivi par le contexte de persistance.
+
+Cela peut arriver après :
+
+- La fermeture de l'EntityManager.
+- La fin du contexte de persistance.
+- Un appel à `entityManager.detach()`.
+- Un appel à `entityManager.clear()`.
+
+Les modifications apportées à l'objet ne sont plus automatiquement synchronisées avec la base.
+
+### Removed (entité supprimée)
+
+L'entité est marquée pour suppression dans le contexte de persistance.
+
+```java
+entityManager.remove(task);
+```
+
+La suppression SQL est exécutée au flush.
+
+## 5.2 Schéma simplifié
+
+```text
+          new Task()
+              |
+              v
+          TRANSIENT
+              |
+       persist() / save()
+              |
+              v
+           MANAGED
+           /     \
+          /       \
+     detach()   remove()
+        /           \
+       v             v
+   DETACHED        REMOVED
+```
+
+Une entité détachée peut être réintégrée au contexte avec `merge()`.
+
+---
+
+# 6. Le contexte de persistance et le Dirty Checking
+
+C'est l'un des mécanismes les plus importants d'Hibernate.
+
+## 6.1 Qu'est-ce que le contexte de persistance ?
+
+Le contexte de persistance est un espace dans lequel JPA suit les entités gérées.
+
+Il est associé à un `EntityManager`.
+
+Il permet notamment :
+
+- De suivre les entités chargées.
+- D'éviter plusieurs instances gérées pour une même identité dans un même contexte.
+- De détecter les modifications.
+- De synchroniser les changements avec la base.
+- De gérer les opérations de persistance et de suppression.
+
+## 6.2 Qu'est-ce que le Dirty Checking ?
+
+Le Dirty Checking est le mécanisme permettant à Hibernate de détecter les modifications apportées aux entités gérées.
+
+Prenons un exemple.
+
+```java
+@Transactional
+public Task updateTask(Long id, String title) {
+
+    Task task = taskRepository.findById(id)
+            .orElseThrow(() -> new TaskNotFoundException(id));
+
+    task.setTitle(title);
+
+    return task;
+}
+```
+
+Pourquoi n'appelons-nous pas `save()` ?
+
+Parce que :
+
+1. `findById()` charge l'entité dans le contexte de persistance.
+2. L'entité devient gérée par Hibernate.
+3. Le setter modifie l'objet.
+4. Hibernate détecte la différence entre son état initial et son état actuel.
+5. Au flush, Hibernate génère l'UPDATE SQL.
+6. La transaction est validée.
+
+SQL produit conceptuellement :
+
+```sql
+UPDATE tasks
+SET title = 'Nouveau titre'
+WHERE id = 1;
+```
+
+Le SQL exact dépend de la configuration Hibernate et du mapping.
+
+## 6.3 Le rôle du flush
+
+Le flush synchronise les changements du contexte de persistance avec la base de données.
+
+```java
+entityManager.flush();
+```
+
+Le flush ne signifie pas que la transaction est validée.
+
+Il est possible d'exécuter un SQL UPDATE au flush puis de revenir en arrière avec un rollback.
+
+Il faut donc distinguer :
+
+- Flush : synchronisation des changements avec la base.
+- Commit : validation définitive de la transaction.
+
+## 6.4 Quand utiliser save() ?
+
+Avec Spring Data JPA :
+
+```java
+taskRepository.save(task);
+```
+
+La méthode `save()` utilise généralement :
+
+- `persist()` pour une nouvelle entité.
+- `merge()` pour une entité considérée comme existante et détachée.
+
+La détection du caractère nouveau dépend notamment de l'identifiant et, si elle est présente, de la propriété `@Version`, ou d'une implémentation de `Persistable`.
+
+| Situation | Utilisation de save() |
+|---|---|
+| Nouvelle entité | Oui |
+| Entité gérée modifiée dans une transaction | Pas nécessaire |
+| Entité détachée à réintégrer | Généralement oui |
+| Suppression d'une entité gérée | Utiliser delete/remove |
+
+**Bonne pratique :** ne pas appeler systématiquement `save()` après chaque setter. Comprendre l'état de l'entité permet d'éviter des opérations inutiles.
+
+Attention : `merge()` retourne l'instance gérée. Il faut utiliser l'objet retourné, car l'objet transmis à `merge()` peut rester détaché.
+
+---
+
+# 7. Spring Data JPA et Repository
+
+Spring Data JPA simplifie considérablement les interactions avec la base.
+
+## 7.1 JpaRepository
+
+Exemple :
+
+```java
+@Repository
+public interface TaskRepository extends JpaRepository<Task, Long> {
+}
+```
+
+`JpaRepository<Task, Long>` indique :
+
+- Task : type de l'entité.
+- Long : type de la clé primaire.
+
+Spring Data génère automatiquement une implémentation.
+
+Les principales méthodes :
+
+| Méthode | Rôle |
+|---|---|
+| `save()` | Persister ou fusionner |
+| `findById()` | Rechercher par identifiant |
+| `findAll()` | Récupérer toutes les entités |
+| `existsById()` | Vérifier l'existence |
+| `deleteById()` | Supprimer par identifiant |
+| `count()` | Compter les enregistrements |
+| `flush()` | Synchroniser le contexte |
+| `saveAndFlush()` | Enregistrer et forcer le flush |
+
+## 7.2 Les requêtes dérivées
+
+Spring Data peut construire des requêtes à partir du nom des méthodes.
+
+```java
+List<Task> findByCompleted(boolean completed);
+```
+
+```java
+List<Task> findByTitleContainingIgnoreCase(String title);
+```
+
+```java
+Optional<Task> findByTitle(String title);
+```
+
+```java
+long countByCompletedFalse();
+```
+
+Cette approche est adaptée aux requêtes simples.
+
+Il faut éviter les noms de méthodes excessivement longs et difficiles à comprendre.
+
+## 7.3 @Query
+
+Pour les requêtes plus spécifiques :
+
+```java
+@Query("SELECT t FROM Task t WHERE t.completed = :completed")
+List<Task> findTasksByStatus(
+    @Param("completed") boolean completed
+);
+```
+
+JPQL travaille avec les entités et leurs propriétés Java, et non directement avec les tables SQL.
+
+Il est également possible d'utiliser du SQL natif :
+
+```java
+@Query(
+    value = "SELECT * FROM tasks WHERE completed = :completed",
+    nativeQuery = true
+)
+List<Task> findTasksNative(
+    @Param("completed") boolean completed
+);
+```
+
+Utiliser les requêtes natives uniquement lorsqu'elles apportent un réel avantage ou lorsqu'une fonctionnalité SQL spécifique est nécessaire.
+
+---
+
+# 8. La gestion des transactions
+
+## 8.1 Qu'est-ce qu'une transaction ?
+
+Une transaction représente une unité de travail devant respecter les propriétés ACID :
+
+| Propriété | Signification |
+|---|---|
+| Atomicité | Tout est exécuté ou tout est annulé |
+| Cohérence | Les contraintes doivent rester respectées |
+| Isolation | Les transactions concurrentes sont isolées selon le niveau choisi |
+| Durabilité | Une transaction validée est conservée |
+
+## 8.2 @Transactional
+
+Spring utilise cette annotation pour gérer les transactions.
+
+```java
+@Service
+public class TaskService {
+
+    private final TaskRepository taskRepository;
+
+    public TaskService(TaskRepository taskRepository) {
+        this.taskRepository = taskRepository;
+    }
+
+    @Transactional
+    public Task createTask(String title) {
+        Task task = new Task(title, null);
+        return taskRepository.save(task);
+    }
+}
+```
+
+Lorsque la méthode se termine correctement, Spring valide la transaction.
+
+En cas d'exception provoquant un rollback, la transaction peut être annulée.
+
+Par défaut, Spring déclenche notamment un rollback sur les exceptions non vérifiées (`RuntimeException` et `Error`), mais pas automatiquement sur toutes les exceptions vérifiées.
+
+## 8.3 readOnly = true
+
+Il est courant de placer cette annotation au niveau du Service :
+
+```java
+@Service
+@Transactional(readOnly = true)
+public class TaskService {
+}
+```
+
+Puis de redéfinir le comportement pour les opérations d'écriture :
+
+```java
+@Transactional
+public Task createTask(...) {
+    // ...
+}
+```
+
+```java
+@Transactional
+public Task updateTask(...) {
+    // ...
+}
+```
+
+`readOnly = true` :
+
+- Exprime l'intention de réaliser une opération de lecture.
+- Peut permettre à Hibernate d'optimiser le Dirty Checking et le flush.
+- Peut transmettre une indication au gestionnaire de transactions et au pilote JDBC.
+
+Attention : ce paramètre ne constitue pas une garantie universelle empêchant les écritures SQL.
+
+Spring Data JPA configure également des transactions sur ses méthodes CRUD. Définir les transactions au niveau du Service permet de couvrir une opération métier complète.
+
+## 8.4 Propagation des transactions
+
+L'annotation permet de définir le comportement lorsqu'une méthode transactionnelle appelle une autre méthode transactionnelle.
+
+Les principaux modes :
+
+| Propagation | Comportement |
+|---|---|
+| REQUIRED | Rejoint la transaction existante ou en crée une |
+| REQUIRES_NEW | Suspend la transaction existante et en crée une nouvelle |
+| SUPPORTS | Rejoint une transaction si elle existe |
+| MANDATORY | Exige une transaction existante |
+| NOT_SUPPORTED | Exécute sans transaction, en suspendant l'existante |
+| NEVER | Refuse une transaction existante |
+| NESTED | Utilise une transaction imbriquée si le gestionnaire le permet |
+
+`REQUIRED` est le comportement par défaut.
+
+Ne pas utiliser `REQUIRES_NEW` ou `NESTED` sans comprendre leurs conséquences sur la cohérence métier.
+
+## 8.5 Isolation des transactions
+
+Les principaux niveaux d'isolation :
+
+- READ_UNCOMMITTED
+- READ_COMMITTED
+- REPEATABLE_READ
+- SERIALIZABLE
+
+Le choix dépend du besoin métier et des capacités de la base.
+
+Il ne faut pas augmenter systématiquement le niveau d'isolation : cela peut réduire les performances et la concurrence.
+
+## 8.6 Attention aux appels internes
+
+Spring utilise généralement des proxies pour appliquer les aspects transactionnels.
+
+Un appel interne à une autre méthode de la même classe ne traverse pas le proxy.
+
+Exemple :
+
+```java
+@Service
+public class TaskService {
+
+    public void process() {
+        updateTask();
+    }
+
+    @Transactional
+    public void updateTask() {
+        // ...
+    }
+}
+```
+
+Dans cet exemple, l'appel interne `updateTask()` ne déclenche pas automatiquement l'interception transactionnelle de Spring.
+
+**Bonne pratique :** placer les frontières transactionnelles sur les méthodes publiques appelées depuis un autre bean Spring et éviter de compter sur les appels internes pour déclencher une transaction.
+
+---
+
+# 9. Les relations entre entités
+
+JPA permet de représenter les relations SQL entre plusieurs entités.
+
+## 9.1 @ManyToOne et @OneToMany
+
+Exemple : un utilisateur peut posséder plusieurs tâches.
+
+```java
+@Entity
+@Table(name = "users")
+public class User {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @OneToMany(mappedBy = "user")
+    private List<Task> tasks = new ArrayList<>();
+}
+```
+
+Dans Task :
+
+```java
+@Entity
+@Table(name = "tasks")
+public class Task {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
+}
+```
+
+La relation est portée par la clé étrangère `user_id` dans la table `tasks`.
+
+`Task` est ici le côté propriétaire de la relation.
+
+Le côté `User` utilise `mappedBy = "user"` pour indiquer que la relation est gérée par l'attribut `user` de `Task`.
+
+## 9.2 @OneToOne
+
+Exemple : un utilisateur possède un profil.
+
+```java
+@OneToOne(fetch = FetchType.LAZY)
+@JoinColumn(name = "profile_id")
+private Profile profile;
+```
+
+Le côté propriétaire contient la clé étrangère.
+
+## 9.3 @ManyToMany
+
+Exemple : plusieurs étudiants peuvent suivre plusieurs cours.
+
+```java
+@ManyToMany
+@JoinTable(
+    name = "student_courses",
+    joinColumns = @JoinColumn(name = "student_id"),
+    inverseJoinColumns = @JoinColumn(name = "course_id")
+)
+private Set<Course> courses = new HashSet<>();
+```
+
+Une table de jointure est créée ou utilisée.
+
+Attention : si la relation possède des attributs métier supplémentaires (date d'inscription, statut, note, etc.), il est généralement préférable de créer une entité intermédiaire plutôt que d'utiliser directement `@ManyToMany`.
+
+## 9.4 FetchType.LAZY et FetchType.EAGER
+
+`LAZY` : les données associées sont chargées lorsque nécessaire.
+
+`EAGER` : les données associées doivent être disponibles lors du chargement de l'entité.
+
+Exemple :
+
+```java
+@ManyToOne(fetch = FetchType.LAZY)
+private User user;
+```
+
+Les relations `@ManyToOne` et `@OneToOne` sont EAGER par défaut en JPA, tandis que les collections `@OneToMany` et `@ManyToMany` sont LAZY par défaut.
+
+**Bonne pratique :** privilégier `LAZY` pour maîtriser le chargement des associations et définir explicitement les données nécessaires aux cas d'utilisation.
+
+Attention : le lazy loading peut provoquer une `LazyInitializationException` lorsque nous tentons d'accéder à une association non chargée après la fermeture du contexte de persistance.
+
+La solution n'est pas de passer systématiquement toutes les relations en EAGER. Il faut définir les besoins de chargement au niveau des requêtes et des services.
+
+## 9.5 CascadeType
+
+Permet de propager certaines opérations sur les entités associées.
+
+Valeurs principales :
+
+- PERSIST
+- MERGE
+- REMOVE
+- REFRESH
+- DETACH
+- ALL
+
+Exemple :
+
+```java
+@OneToMany(
+    mappedBy = "user",
+    cascade = CascadeType.PERSIST
+)
+private List<Task> tasks = new ArrayList<>();
+```
+
+Attention : `CascadeType.ALL` ne doit pas être utilisé automatiquement.
+
+Une suppression en cascade mal configurée peut supprimer des données métier qui doivent être conservées.
+
+`orphanRemoval = true` permet de supprimer une entité enfant lorsqu'elle est retirée de la relation, selon les règles de JPA.
+
+---
+
+# 10. Optimisation des performances
+
+Une application utilisant Hibernate peut fonctionner correctement avec peu de données et devenir très lente lorsque le volume augmente.
+
+Il faut comprendre les principaux problèmes de performance.
+
+## 10.1 Le problème N+1
+
+C'est un problème très fréquent avec les relations JPA.
+
+Imaginons que nous récupérions 100 utilisateurs :
+
+```java
+List<User> users = userRepository.findAll();
+
+for (User user : users) {
+    System.out.println(user.getTasks().size());
+}
+```
+
+Selon le mapping et la stratégie de chargement, Hibernate peut exécuter :
+
+- Une requête pour récupérer les utilisateurs.
+- Une requête supplémentaire pour chaque utilisateur afin de récupérer ses tâches.
+
+Soit potentiellement 101 requêtes.
+
+C'est le problème N+1.
+
+### Solution 1 : JOIN FETCH
+
+```java
+@Query("""
+    SELECT DISTINCT u
+    FROM User u
+    LEFT JOIN FETCH u.tasks
+    """)
+List<User> findAllWithTasks();
+```
+
+Cette requête demande à Hibernate de récupérer les utilisateurs et leurs tâches dans une même requête SQL.
+
+Attention : `JOIN FETCH` sur une collection peut produire des lignes dupliquées et ne se combine pas toujours correctement avec la pagination.
+
+### Solution 2 : EntityGraph
+
+```java
+@EntityGraph(attributePaths = {"tasks"})
+List<User> findAll();
+```
+
+Cette solution permet de définir les associations à charger pour une requête donnée.
+
+### Solution 3 : DTO ou projection
+
+Si nous avons uniquement besoin de quelques informations, il est souvent inutile de charger toutes les entités.
+
+Exemple :
+
+```java
+public record TaskSummary(
+    Long id,
+    String title,
+    boolean completed
+) {}
+```
+
+Une projection permet de récupérer uniquement les colonnes nécessaires.
+
+**Bonne pratique :** charger les données dont le cas d'utilisation a réellement besoin, et pas toutes les associations par défaut.
+
+## 10.2 Pagination
+
+Ne jamais récupérer des millions de lignes avec `findAll()` pour les afficher dans une API REST.
+
+Utiliser `Pageable` :
+
+```java
+Page<Task> findAll(Pageable pageable);
+```
+
+Dans le Service :
+
+```java
+public Page<Task> getTasks(Pageable pageable) {
+    return taskRepository.findAll(pageable);
+}
+```
+
+Exemple d'utilisation :
+
+```java
+Pageable pageable = PageRequest.of(
+    0,
+    20,
+    Sort.by("createdAt").descending()
+);
+```
+
+Attention :
+
+- Limiter la taille maximale des pages.
+- Prévoir un tri déterministe.
+- Utiliser une pagination par curseur ou par clé lorsque le volume est très important et que la pagination par offset devient coûteuse.
+
+## 10.3 Projections
+
+Une projection permet de ne récupérer que les données utiles.
+
+```java
+public interface TaskProjection {
+
+    Long getId();
+
+    String getTitle();
+
+    boolean getCompleted();
+}
+```
+
+Repository :
+
+```java
+List<TaskProjection> findByCompleted(boolean completed);
+```
+
+Les projections peuvent réduire le volume de données transférées et éviter le chargement inutile d'entités.
+
+## 10.4 Batch Processing
+
+Lorsque nous devons insérer ou modifier un grand nombre de lignes, les opérations unitaires peuvent devenir coûteuses.
+
+Hibernate permet d'utiliser le batch JDBC.
+
+Configuration indicative :
+
+```yaml
+spring:
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+```
+
+Il est également possible de configurer :
+
+```yaml
+spring:
+  jpa:
+    properties:
+      hibernate:
+        order_inserts: true
+        order_updates: true
+```
+
+Attention : le batching dépend de la stratégie de génération des identifiants. Avec `GenerationType.IDENTITY`, Hibernate désactive généralement le batching des INSERT concernés.
+
+Pour les traitements massifs, envisager :
+
+- Le découpage en lots.
+- Le flush périodique.
+- Le clear périodique du contexte de persistance.
+- `JdbcTemplate` ou des opérations SQL en batch lorsque cela est plus adapté.
+
+Exemple avec EntityManager :
+
+```java
+for (int i = 0; i < tasks.size(); i++) {
+    entityManager.persist(tasks.get(i));
+
+    if (i > 0 && i % 50 == 0) {
+        entityManager.flush();
+        entityManager.clear();
+    }
+}
+```
+
+Le `clear()` détache toutes les entités gérées : il faut donc faire attention aux objets encore utilisés par le traitement.
+
+## 10.5 Index SQL
+
+Les index accélèrent certaines recherches, mais ont un coût en écriture et en stockage.
+
+Exemple :
+
+```sql
+CREATE INDEX idx_tasks_created_at
+ON tasks(created_at);
+```
+
+Créer un index uniquement lorsqu'il correspond à un besoin réel.
+
+Analyser les requêtes lentes avec :
+
+```sql
+EXPLAIN ANALYZE
+SELECT *
+FROM tasks
+WHERE completed = false;
+```
+
+Ne pas multiplier les index sans analyser les requêtes et les plans d'exécution.
+
+## 10.6 Cache de premier et de second niveau
+
+**Cache de premier niveau**
+
+- Associé à l'EntityManager.
+- Activé par défaut.
+- Limité au contexte de persistance.
+- Évite notamment de recharger plusieurs fois la même entité dans un même contexte.
+
+**Cache de second niveau**
+
+- Partagé entre plusieurs contextes de persistance.
+- Facultatif.
+- Nécessite un fournisseur de cache et une configuration adaptée.
+- Peut être intéressant pour des données fréquemment lues et rarement modifiées.
+
+Ne pas activer le cache de second niveau sans définir une stratégie de cohérence et mesurer son intérêt.
+
+---
+
+# 11. Sécurité et intégrité des données
+
+La sécurité ne repose pas uniquement sur Spring Security. Les interactions avec la base doivent également respecter plusieurs règles.
+
+## 11.1 Ne jamais exposer directement les entités JPA
+
+Une mauvaise pratique consiste à retourner directement une entité dans un Controller :
+
+```java
+@GetMapping("/{id}")
+public Task getTask(@PathVariable Long id) {
+    return taskService.getTaskById(id);
+}
+```
+
+Pourquoi est-ce déconseillé ?
+
+- L'API devient dépendante du modèle de persistance.
+- Des attributs internes peuvent être exposés.
+- Les relations JPA peuvent provoquer des chargements inattendus.
+- La sérialisation peut entraîner des références circulaires.
+- Les modifications de l'entité peuvent casser le contrat de l'API.
+
+Utiliser des DTO.
+
+Exemple :
+
+```java
+public record TaskResponse(
+    Long id,
+    String title,
+    String description,
+    boolean completed,
+    LocalDateTime createdAt
+) {}
+```
+
+L'entité reste interne à l'application.
+
+## 11.2 Utiliser Bean Validation
+
+Valider les données entrantes.
+
+```java
+public record CreateTaskRequest(
+
+    @NotBlank
+    @Size(max = 150)
+    String title,
+
+    @Size(max = 2000)
+    String description
+
+) {}
+```
+
+Dans le Controller :
+
+```java
+@PostMapping
+public ResponseEntity<TaskResponse> create(
+    @Valid @RequestBody CreateTaskRequest request
+) {
+    // ...
+}
+```
+
+La validation doit être effectuée à l'entrée de l'application.
+
+Attention : les validations Java ne remplacent pas les contraintes SQL.
+
+Il faut conserver les contraintes d'intégrité au niveau de la base.
+
+## 11.3 Prévenir les injections SQL
+
+Ne jamais construire une requête SQL en concaténant directement des valeurs fournies par un utilisateur.
+
+Mauvaise pratique :
+
+```java
+String sql = "SELECT * FROM tasks WHERE title = '" + title + "'";
+```
+
+Bonne pratique :
+
+```java
+@Query("SELECT t FROM Task t WHERE t.title = :title")
+List<Task> findByTitle(@Param("title") String title);
+```
+
+Les paramètres nommés permettent de séparer les valeurs de la structure de la requête.
+
+Pour les requêtes natives, utiliser également des paramètres liés.
+
+## 11.4 Ne pas utiliser les données du client sans contrôle
+
+Exemple : un utilisateur envoie une requête pour modifier une tâche.
+
+Il ne faut pas lui permettre de modifier librement des attributs internes comme :
+
+- `id`
+- `createdAt`
+- `userId`
+- `role`
+- `version`
+
+Les DTO de requête doivent exposer uniquement les champs que l'utilisateur est autorisé à modifier.
+
+Cela évite notamment les vulnérabilités de type mass assignment.
+
+## 11.5 Contrôler les accès aux données
+
+Si les tâches appartiennent à des utilisateurs, il ne suffit pas de rechercher une tâche avec son identifiant :
+
+```java
+taskRepository.findById(id);
+```
+
+Il faut également vérifier que l'utilisateur connecté a le droit d'accéder à cette tâche.
+
+Une requête plus adaptée :
+
+```java
+Optional<Task> findByIdAndUserId(Long taskId, Long userId);
+```
+
+L'identité de l'utilisateur doit provenir du contexte d'authentification côté serveur, et non d'une valeur arbitraire envoyée dans le corps de la requête.
+
+## 11.6 Protéger les informations sensibles
+
+Bonnes pratiques :
+
+- Ne jamais stocker les mots de passe en clair.
+- Ne pas journaliser les mots de passe, tokens ou données sensibles.
+- Utiliser des comptes SQL avec des permissions minimales.
+- Séparer les comptes de migration et les comptes d'exécution lorsque le contexte le justifie.
+- Ne pas intégrer les secrets dans Git.
+- Utiliser un gestionnaire de secrets adapté.
+- Protéger les connexions avec TLS lorsque cela est nécessaire.
+- Limiter les droits d'accès aux données au strict besoin métier.
+
+## 11.7 Éviter les suppressions accidentelles
+
+Une suppression doit être cohérente avec les règles métier.
+
+Selon le domaine, envisager :
+
+- Une suppression physique.
+- Une suppression logique avec `deleted_at`.
+- Un archivage.
+- Une conservation réglementaire.
+
+La suppression logique n'est pas toujours préférable : elle impose également de gérer correctement les requêtes, les contraintes et les politiques de conservation.
+
+---
+
+# 12. Gestion des schémas avec Flyway
+
+Dans une application professionnelle, il est important de séparer la gestion du schéma SQL de la gestion des entités Java.
+
+## 12.1 Pourquoi utiliser Flyway ?
+
+Flyway permet de versionner les évolutions de la base.
+
+Exemple :
+
+```text
+src/main/resources/db/migration/
+│
+├── V1__create_tasks_table.sql
+├── V2__add_user_id_to_tasks.sql
+└── V3__create_task_indexes.sql
+```
+
+Chaque migration est exécutée une fois et enregistrée dans la table `flyway_schema_history`.
+
+## 12.2 Ne pas laisser Hibernate créer le schéma en production
+
+Configuration recommandée :
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    enabled: true
+```
+
+Les valeurs possibles de `ddl-auto` :
+
+| Valeur | Comportement |
+|---|---|
+| none | Aucune action automatique |
+| validate | Vérifie le mapping |
+| update | Modifie le schéma |
+| create | Crée le schéma |
+| create-drop | Crée puis supprime le schéma à l'arrêt |
+
+Pour un environnement professionnel, préférer `validate` ou `none` et confier les évolutions à Flyway.
+
+## 12.3 Ne jamais modifier une migration déjà exécutée
+
+Si `V1__create_tasks_table.sql` a déjà été exécutée, ne pas modifier son contenu.
+
+Créer une nouvelle migration :
+
+```text
+V2__add_priority_to_tasks.sql
+```
+
+Exemple :
+
+```sql
+ALTER TABLE tasks
+ADD COLUMN priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL';
+```
+
+Cela garantit la traçabilité des changements et facilite le déploiement sur plusieurs environnements.
+
+---
+
+# 13. Organisation et architecture du code
+
+## 13.1 Ne pas multiplier les abstractions inutilement
+
+Il est fréquent de créer systématiquement :
+
+```text
+TaskService
+TaskServiceImpl
+TaskRepository
+TaskRepositoryImpl
+```
+
+Ce n'est pas toujours utile.
+
+Une classe Service concrète suffit souvent :
+
+```java
+@Service
+public class TaskService {
+}
+```
+
+Créer une interface lorsqu'elle représente un contrat utile, une frontière architecturale ou plusieurs implémentations réellement nécessaires.
+
+En revanche, dans une architecture hexagonale ou Clean Architecture, les interfaces peuvent jouer un rôle architectural essentiel : elles définissent notamment les ports de communication entre les couches.
+
+## 13.2 Éviter les entités anémiques lorsque le domaine est complexe
+
+Pour un CRUD simple, des getters et setters peuvent suffire.
+
+Mais lorsque les règles métier se complexifient, il est préférable de placer certaines opérations dans l'entité.
+
+Exemple :
+
+```java
+public void markAsCompleted() {
+    if (completed) {
+        throw new IllegalStateException(
+            "Task is already completed"
+        );
+    }
+
+    completed = true;
+}
+```
+
+Le Service peut alors appeler :
+
+```java
+task.markAsCompleted();
+```
+
+Cela permet de centraliser les règles liées à l'état de l'objet.
+
+## 13.3 Éviter Lombok @Data sur les entités
+
+`@Data` génère notamment :
+
+- Getters.
+- Setters.
+- equals().
+- hashCode().
+- toString().
+
+Cela peut provoquer des problèmes avec les entités JPA :
+
+- Relations chargées involontairement.
+- Récursion entre entités.
+- Comparaisons incorrectes avec les proxys Hibernate.
+- Comportements dangereux avec des identifiants générés.
+
+Préférer une génération explicite ou des annotations Lombok ciblées comme `@Getter` et `@Setter`, en maîtrisant `equals()`, `hashCode()` et `toString()`.
+
+## 13.4 Attention aux méthodes equals() et hashCode()
+
+Les entités JPA possèdent un cycle de vie particulier.
+
+Un identifiant généré peut être `null` avant la persistance puis recevoir une valeur après insertion.
+
+Une implémentation incorrecte de `hashCode()` peut rendre une entité introuvable dans un `HashSet` après son insertion.
+
+Éviter d'utiliser automatiquement tous les attributs et toutes les relations dans `equals()` et `hashCode()`.
+
+Définir une stratégie adaptée à la nature de l'entité et aux besoins du domaine.
+
+---
+
+# 14. Tests JPA et Hibernate
+
+Il faut tester les interactions avec la base, pas uniquement vérifier que le contexte Spring démarre.
+
+## 14.1 Tests unitaires du Service
+
+Mockito permet de tester la logique métier sans démarrer PostgreSQL.
+
+```java
+@ExtendWith(MockitoExtension.class)
+class TaskServiceTest {
+
+    @Mock
+    private TaskRepository taskRepository;
+
+    @InjectMocks
+    private TaskService taskService;
+
+    @Test
+    void shouldReturnTaskWhenTaskExists() {
+
+        Task task = new Task(
+            "Learn JPA",
+            "Understand Hibernate"
+        );
+
+        when(taskRepository.findById(1L))
+            .thenReturn(Optional.of(task));
+
+        Task result = taskService.getTaskById(1L);
+
+        assertNotNull(result);
+        assertEquals("Learn JPA", result.getTitle());
+    }
+}
+```
+
+Il faut également tester :
+
+- Les cas d'erreur.
+- Les tâches inexistantes.
+- Les règles métier.
+- Les interactions avec le Repository.
+
+## 14.2 Tests d'intégration avec @DataJpaTest
+
+Cette annotation permet de tester la couche JPA.
+
+```java
+@DataJpaTest
+class TaskRepositoryTest {
+
+    @Autowired
+    private TaskRepository taskRepository;
+
+    @Test
+    void shouldSaveTask() {
+
+        Task task = new Task(
+            "Learn Spring Boot",
+            "Practice JPA"
+        );
+
+        Task saved = taskRepository.saveAndFlush(task);
+
+        assertNotNull(saved.getId());
+    }
+}
+```
+
+Pour éviter les différences entre la base de test et la base de production, utiliser de préférence Testcontainers avec PostgreSQL pour les tests d'intégration importants.
+
+Cela permet de tester avec le véritable moteur de base de données.
+
+## 14.3 Tester les migrations Flyway
+
+Les tests doivent également vérifier :
+
+- Que les migrations s'exécutent correctement.
+- Que les tables et contraintes existent.
+- Que les entités correspondent au schéma.
+- Que les évolutions successives restent compatibles.
+
+Un test d'intégration avec PostgreSQL et Flyway permet de détecter les problèmes qui ne seraient pas visibles avec une base en mémoire.
+
+---
+
+# 15. Configuration recommandée pour Spring Boot
+
+Voici une configuration de référence pour notre application Spring Boot avec PostgreSQL et Flyway.
+
+```yaml
+spring:
+  application:
+    name: task-api
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/taskdb
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  jpa:
+    open-in-view: false
+
+    hibernate:
+      ddl-auto: validate
+
+    show-sql: false
+
+    properties:
+      hibernate:
+        format_sql: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: 8080
+```
+
+Quelques explications :
+
+### open-in-view: false
+
+Désactive le maintien du contexte de persistance pendant toute la durée de la requête HTTP.
+
+Cela encourage à charger explicitement les données nécessaires dans la couche Service, puis à construire les DTO avant de retourner la réponse.
+
+C'est particulièrement important pour éviter les chargements SQL imprévus pendant la sérialisation JSON.
+
+### ddl-auto: validate
+
+Hibernate vérifie la cohérence entre les entités et le schéma existant.
+
+Il ne crée pas les tables.
+
+### show-sql: false
+
+Évite d'afficher toutes les requêtes SQL en permanence.
+
+Pour analyser les performances, activer temporairement des logs ciblés dans un environnement de développement.
+
+### HikariCP
+
+HikariCP est le pool de connexions utilisé par défaut dans de nombreuses configurations Spring Boot.
+
+Les paramètres doivent être adaptés :
+
+- Au nombre de requêtes simultanées.
+- Au nombre d'instances de l'application.
+- Aux capacités de PostgreSQL.
+- Aux limites de connexions de la base.
+
+Attention : le maximum de connexions de toutes les instances doit rester compatible avec les capacités de PostgreSQL.
+
+Les identifiants de connexion sont injectés par variables d'environnement. Ils ne doivent pas être inscrits en clair dans le fichier de configuration versionné.
+
+---
+
+# 16. Checklist des bonnes pratiques
+
+Cette checklist peut servir lors de la création ou de la revue d'une application Spring Boot utilisant JPA et Hibernate.
+
+## Mapping et entités
+
+- [ ] Chaque entité possède une clé primaire.
+- [ ] Les noms de tables et colonnes sont maîtrisés.
+- [ ] Les types Java correspondent aux types SQL.
+- [ ] Les constructeurs requis par JPA sont présents.
+- [ ] Les contraintes métier sont également protégées au niveau SQL.
+- [ ] Les dates utilisent des types adaptés à leur sémantique.
+- [ ] Les méthodes equals() et hashCode() sont adaptées aux entités.
+
+## Transactions et persistance
+
+- [ ] Les opérations métier importantes sont transactionnelles.
+- [ ] Les lectures utilisent readOnly lorsque cela est pertinent.
+- [ ] Les modifications d'entités gérées exploitent le Dirty Checking.
+- [ ] save() n'est pas appelé inutilement.
+- [ ] Le flush et le commit sont bien distingués.
+- [ ] Les transactions sont suffisamment courtes.
+- [ ] Les appels internes aux méthodes transactionnelles sont maîtrisés.
+
+## Relations et performances
+
+- [ ] Les associations sont chargées de manière maîtrisée.
+- [ ] Les relations ne sont pas systématiquement EAGER.
+- [ ] Le problème N+1 est recherché.
+- [ ] Les DTO ou projections sont utilisés lorsque nécessaire.
+- [ ] Les résultats volumineux sont paginés.
+- [ ] Les index correspondent aux requêtes réelles.
+- [ ] Les traitements massifs utilisent une stratégie batch adaptée.
+- [ ] Le nombre de connexions est adapté à la charge.
+
+## Sécurité
+
+- [ ] Les entités ne sont pas exposées directement par les Controllers.
+- [ ] Les DTO sont validés avec Bean Validation.
+- [ ] Les requêtes utilisent des paramètres liés.
+- [ ] Les droits d'accès aux données sont vérifiés côté serveur.
+- [ ] Les secrets ne sont pas stockés dans Git.
+- [ ] Les informations sensibles ne sont pas journalisées.
+- [ ] Les comptes de base de données disposent du minimum de permissions nécessaires.
+- [ ] Les suppressions respectent les règles métier.
+
+## Maintenance et qualité
+
+- [ ] Flyway ou un outil équivalent gère les migrations.
+- [ ] Hibernate utilise validate ou none en production.
+- [ ] Les migrations déjà exécutées ne sont pas modifiées.
+- [ ] Les tests unitaires couvrent les règles métier.
+- [ ] Les tests d'intégration utilisent une base représentative de la production.
+- [ ] Les requêtes lentes sont analysées.
+- [ ] Les erreurs de persistance sont traitées proprement.
+
+---
+
+# Conclusion
+
+JPA et Hibernate permettent de travailler avec des objets Java tout en déléguant une grande partie de la gestion SQL au framework.
+
+Mais utiliser correctement ces technologies ne consiste pas uniquement à connaître les annotations.
+
+Il faut surtout comprendre :
+
+1. Le cycle de vie des entités.
+2. Le fonctionnement du contexte de persistance.
+3. Le Dirty Checking.
+4. Les transactions et leur propagation.
+5. Les stratégies de chargement des associations.
+6. Les mécanismes d'optimisation des requêtes.
+7. Les limites entre les entités, les DTO et les données exposées.
+8. La gestion des évolutions du schéma.
+
+**Le principe essentiel :** JPA et Hibernate simplifient l'accès aux données, mais ils ne dispensent pas le développeur de comprendre le fonctionnement de la base relationnelle, les transactions, les contraintes SQL et les performances des requêtes.
+
+Une application performante et sécurisée repose sur une bonne combinaison entre la conception du modèle métier, la maîtrise de JPA/Hibernate et une base de données correctement structurée.
